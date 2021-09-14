@@ -10,7 +10,7 @@ import socket
 import time
 import sys
 
-import tensorboard_logger as tb_logger
+# import tensorboard_logger as tb_logger
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -166,7 +166,7 @@ def main():
     opt = parse_option()
 
     # tensorboard logger
-    logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
+    # logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
 
     # dataloader
     train_partition = 'trainval' if opt.use_trainval else 'train'
@@ -335,14 +335,14 @@ def main():
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
 
-        logger.log_value('train_acc', train_acc, epoch)
-        logger.log_value('train_loss', train_loss, epoch)
+        # logger.log_value('train_acc', train_acc, epoch)
+        # logger.log_value('train_loss', train_loss, epoch)
 
         test_acc, test_acc_top5, test_loss = validate(val_loader, model_s, criterion_cls, opt)
 
-        logger.log_value('test_acc', test_acc, epoch)
-        logger.log_value('test_acc_top5', test_acc_top5, epoch)
-        logger.log_value('test_loss', test_loss, epoch)
+        # logger.log_value('test_acc', test_acc, epoch)
+        # logger.log_value('test_acc_top5', test_acc_top5, epoch)
+        # logger.log_value('test_loss', test_loss, epoch)
 
         # regular saving
         if epoch % opt.save_freq == 0:

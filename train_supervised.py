@@ -181,7 +181,7 @@ def main():
         train_loader = DataLoader(CIFAR100(args=opt, partition=train_partition, transform=train_trans),
                                   batch_size=opt.batch_size, shuffle=True, drop_last=True,
                                   num_workers=opt.num_workers)
-        val_loader = DataLoader(CIFAR100(args=opt, partition='train', transform=test_trans),
+        val_loader = DataLoader(CIFAR100(args=opt, partition='val', transform=test_trans),
                                 batch_size=opt.batch_size // 2, shuffle=False, drop_last=False,
                                 num_workers=opt.num_workers // 2)
         meta_testloader = DataLoader(MetaCIFAR100(args=opt, partition='test',

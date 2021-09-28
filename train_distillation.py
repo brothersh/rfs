@@ -10,7 +10,7 @@ import socket
 import time
 import sys
 
-# import tensorboard_logger as tb_logger
+import tensorboard_logger as tb_logger
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -106,6 +106,7 @@ def parse_option():
 
     if 'trainval' in opt.path_t:
         opt.use_trainval = True
+        print('use trainval')
     else:
         opt.use_trainval = False
 
@@ -166,7 +167,7 @@ def main():
     opt = parse_option()
 
     # tensorboard logger
-    # logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
+    logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
 
     # dataloader
     train_partition = 'trainval' if opt.use_trainval else 'train'
@@ -234,7 +235,7 @@ def main():
         train_loader = DataLoader(train_set,
                                   batch_size=opt.batch_size, shuffle=True, drop_last=True,
                                   num_workers=opt.num_workers)
-        val_loader = DataLoader(CIFAR100(args=opt, partition='train', transform=test_trans),
+        val_loader = DataLoader(CIFAR100(args=opt, partition='trainval', transform=test_trans),
                                 batch_size=opt.batch_size // 2, shuffle=False, drop_last=False,
                                 num_workers=opt.num_workers // 2)
         meta_testloader = DataLoader(MetaCIFAR100(args=opt, partition='test',
@@ -335,14 +336,14 @@ def main():
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
 
-        # logger.log_value('train_acc', train_acc, epoch)
-        # logger.log_value('train_loss', train_loss, epoch)
+        logger.log_value('train_acc', train_acc, epoch)
+        logger.log_value('train_loss', train_loss, epoch)
 
         test_acc, test_acc_top5, test_loss = validate(val_loader, model_s, criterion_cls, opt)
 
-        # logger.log_value('test_acc', test_acc, epoch)
-        # logger.log_value('test_acc_top5', test_acc_top5, epoch)
-        # logger.log_value('test_loss', test_loss, epoch)
+        logger.log_value('test_acc', test_acc, epoch)
+        logger.log_value('test_acc_top5', test_acc_top5, epoch)
+        logger.log_value('test_loss', test_loss, epoch)
 
         # regular saving
         if epoch % opt.save_freq == 0:

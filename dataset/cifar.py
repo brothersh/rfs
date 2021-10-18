@@ -12,6 +12,7 @@ from torch.utils.data import Dataset
 
 class CIFAR100(Dataset):
     """support FC100 and CIFAR-FS"""
+
     def __init__(self, args, partition='train', pretrain=True, is_sample=False, k=4096,
                  transform=None):
         super(Dataset, self).__init__()
@@ -48,11 +49,11 @@ class CIFAR100(Dataset):
         else:
             self.file_pattern = '%s.pickle'
         self.data = {}
-
         with open(os.path.join(self.data_root, self.file_pattern % partition), 'rb') as f:
             data = pickle.load(f, encoding='latin1')
             self.imgs = data['data']
             labels = data['labels']
+
             # adjust sparse labels to labels from 0 to n.
             cur_class = 0
             label2label = {}
@@ -93,6 +94,7 @@ class CIFAR100(Dataset):
         img = np.asarray(self.imgs[item]).astype('uint8')
         img = self.transform(img)
         target = self.labels[item] - min(self.labels)
+
 
         if not self.is_sample:
             return img, target, item

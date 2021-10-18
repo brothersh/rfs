@@ -19,15 +19,17 @@ from models.util import create_model
 from dataset.mini_imagenet import ImageNet, MetaImageNet
 from dataset.tiered_imagenet import TieredImageNet, MetaTieredImageNet
 from dataset.cifar import CIFAR100, MetaCIFAR100
+from dataset.mycifar import MyCIFAR100
+from dataset.mymini import MyImageNet
 from dataset.transform_cfg import transforms_options, transforms_list
 
-from util import adjust_learning_rate, accuracy, AverageMeter
+from util import adjust_learning_rate, accuracy, AverageMeter, validate
 from eval.meta_eval import meta_test
-from eval.cls_eval import validate
+
+from losses.center_loss import compute_center_loss, get_center_delta
 
 
 def parse_option():
-
     parser = argparse.ArgumentParser('argument for training')
 
     parser.add_argument('--eval_freq', type=int, default=10, help='meta-eval frequency')
@@ -45,6 +47,8 @@ def parse_option():
     parser.add_argument('--weight_decay', type=float, default=5e-4, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
     parser.add_argument('--adam', action='store_true', help='use adam optimizer')
+
+    parser.add_argument('--use_center_loss', action='store_true',help='use center loss')
 
     # dataset
     parser.add_argument('--model', type=str, default='resnet12', choices=model_pool)
@@ -84,7 +88,8 @@ def parse_option():
 
     if opt.use_trainval:
         opt.trial = opt.trial + '_trainval'
-
+    if opt.use_center_loss:
+        opt.trial = opt.trial + '_with_center_loss'
     # set the path according to the environment
     if not opt.model_path:
         opt.model_path = './models_pretrained'
@@ -126,19 +131,25 @@ def parse_option():
 
 
 def main():
-
+    os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
     opt = parse_option()
 
     # dataloader
     train_partition = 'trainval' if opt.use_trainval else 'train'
     if opt.dataset == 'miniImageNet':
         train_trans, test_trans = transforms_options[opt.transform]
-        train_loader = DataLoader(ImageNet(args=opt, partition=train_partition, transform=train_trans),
+        train_loader = DataLoader(MyImageNet(data_root=opt.data_root, partition=train_partition, transform=train_trans),
                                   batch_size=opt.batch_size, shuffle=True, drop_last=True,
                                   num_workers=opt.num_workers)
-        val_loader = DataLoader(ImageNet(args=opt, partition='val', transform=test_trans),
+        val_loader = DataLoader(MyImageNet(data_root=opt.data_root, partition='val', transform=test_trans),
                                 batch_size=opt.batch_size // 2, shuffle=False, drop_last=False,
                                 num_workers=opt.num_workers // 2)
+        # train_loader = DataLoader(ImageNet(args=opt, partition=train_partition, transform=train_trans),
+        #                           batch_size=opt.batch_size, shuffle=True, drop_last=True,
+        #                           num_workers=opt.num_workers)
+        # val_loader = DataLoader(ImageNet(args=opt, partition='val', transform=test_trans),
+        #                         batch_size=opt.batch_size // 2, shuffle=False, drop_last=False,
+        #                         num_workers=opt.num_workers // 2)
         meta_testloader = DataLoader(MetaImageNet(args=opt, partition='test',
                                                   train_transform=train_trans,
                                                   test_transform=test_trans),
@@ -152,7 +163,7 @@ def main():
         if opt.use_trainval:
             n_cls = 80
         else:
-            n_cls = 64
+            n_cls = 80
     elif opt.dataset == 'tieredImageNet':
         train_trans, test_trans = transforms_options[opt.transform]
         train_loader = DataLoader(TieredImageNet(args=opt, partition=train_partition, transform=train_trans),
@@ -178,12 +189,21 @@ def main():
     elif opt.dataset == 'CIFAR-FS' or opt.dataset == 'FC100':
         train_trans, test_trans = transforms_options['D']
 
-        train_loader = DataLoader(CIFAR100(args=opt, partition=train_partition, transform=train_trans),
+        train_set = MyCIFAR100(data_root=opt.data_root, partition=train_partition, transform=train_trans)
+        val_set = MyCIFAR100(data_root=opt.data_root, partition='val', transform=test_trans,
+                             label_map=train_set.real2fake)
+        train_loader = DataLoader(train_set,
                                   batch_size=opt.batch_size, shuffle=True, drop_last=True,
                                   num_workers=opt.num_workers)
-        val_loader = DataLoader(CIFAR100(args=opt, partition='val', transform=test_trans),
+        val_loader = DataLoader(val_set,
                                 batch_size=opt.batch_size // 2, shuffle=False, drop_last=False,
                                 num_workers=opt.num_workers // 2)
+        # train_loader = DataLoader(CIFAR100(args=opt, partition=train_partition, transform=train_trans),
+        #                           batch_size=opt.batch_size, shuffle=True, drop_last=True,
+        #                           num_workers=opt.num_workers)
+        # val_loader = DataLoader(CIFAR100(args=opt, partition='val', transform=test_trans),
+        #                         batch_size=opt.batch_size // 2, shuffle=False, drop_last=False,
+        #                         num_workers=opt.num_workers // 2)
         meta_testloader = DataLoader(MetaCIFAR100(args=opt, partition='test',
                                                   train_transform=train_trans,
                                                   test_transform=test_trans),
@@ -198,7 +218,7 @@ def main():
             n_cls = 80
         else:
             if opt.dataset == 'CIFAR-FS':
-                n_cls = 64
+                n_cls = 80
             elif opt.dataset == 'FC100':
                 n_cls = 60
             else:
@@ -220,13 +240,20 @@ def main():
                               momentum=opt.momentum,
                               weight_decay=opt.weight_decay)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion_cls = nn.CrossEntropyLoss()
+
+    # center loss
+    _x = torch.ones(2, 3, 84, 84)
+    model.eval()
+    feat, _ = model(_x, is_feat=True)
+    feature_dim = feat[-1].shape[1]
+    centers = (torch.rand(n_cls, feature_dim).cuda() - 0.5) * 2
 
     if torch.cuda.is_available():
         if opt.n_gpu > 1:
             model = nn.DataParallel(model)
         model = model.cuda()
-        criterion = criterion.cuda()
+        criterion_cls = criterion_cls.cuda()
         cudnn.benchmark = True
 
     # tensorboard
@@ -247,14 +274,14 @@ def main():
         print("==> training...")
 
         time1 = time.time()
-        train_acc, train_loss = train(epoch, train_loader, model, criterion, optimizer, opt)
+        train_acc, train_loss = train(epoch, train_loader, model, criterion_cls, optimizer, opt, centers)
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
 
         logger.log_value('train_acc', train_acc, epoch)
         logger.log_value('train_loss', train_loss, epoch)
 
-        test_acc, test_acc_top5, test_loss = validate(val_loader, model, criterion, opt)
+        test_acc, test_acc_top5, test_loss = validate(val_loader, model, criterion_cls, opt)
 
         logger.log_value('test_acc', test_acc, epoch)
         logger.log_value('test_acc_top5', test_acc_top5, epoch)
@@ -279,7 +306,7 @@ def main():
     torch.save(state, save_file)
 
 
-def train(epoch, train_loader, model, criterion, optimizer, opt):
+def train(epoch, train_loader, model, criterion, optimizer, opt, centers):
     """One epoch training"""
     model.train()
 
@@ -299,8 +326,12 @@ def train(epoch, train_loader, model, criterion, optimizer, opt):
             target = target.cuda()
 
         # ===================forward=====================
-        output = model(input)
-        loss = criterion(output, target)
+        feat, output = model(input, is_feat=True)
+        loss_cls = criterion(output, target)
+        loss_center = 0
+        if opt.use_center_loss:
+            loss_center = compute_center_loss(feat[-1], centers, target)
+        loss = loss_cls + 0.03 * loss_center
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), input.size(0))
@@ -311,6 +342,11 @@ def train(epoch, train_loader, model, criterion, optimizer, opt):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        # ===================centers=====================
+        if opt.use_center_loss:
+            centers_delta = get_center_delta(feat[-1], centers, target, alpha=0.5)
+            centers = centers - centers_delta
 
         # ===================meters=====================
         batch_time.update(time.time() - end)
@@ -327,8 +363,8 @@ def train(epoch, train_loader, model, criterion, optimizer, opt):
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t'
                   'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                   epoch, idx, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses, top1=top1, top5=top5))
+                epoch, idx, len(train_loader), batch_time=batch_time,
+                data_time=data_time, loss=losses, top1=top1, top5=top5))
             sys.stdout.flush()
 
     print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'

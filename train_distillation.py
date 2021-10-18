@@ -26,15 +26,14 @@ from distill.criterion import DistillKL, NCELoss, Attention, HintLoss
 from dataset.mini_imagenet import ImageNet, MetaImageNet
 from dataset.tiered_imagenet import TieredImageNet, MetaTieredImageNet
 from dataset.cifar import CIFAR100, MetaCIFAR100
+from dataset.mycifar import MyCIFAR100
 from dataset.transform_cfg import transforms_options, transforms_list
 
-from util import adjust_learning_rate, accuracy, AverageMeter
+from util import adjust_learning_rate, accuracy, AverageMeter, validate
 from eval.meta_eval import meta_test
-from eval.cls_eval import validate
 
 
 def parse_option():
-
     parser = argparse.ArgumentParser('argument for training')
 
     parser.add_argument('--eval_freq', type=int, default=10, help='meta-eval frequency')
@@ -174,7 +173,8 @@ def main():
     if opt.dataset == 'miniImageNet':
         train_trans, test_trans = transforms_options[opt.transform]
         if opt.distill in ['contrast']:
-            train_set = ImageNet(args=opt, partition=train_partition, transform=train_trans, is_sample=True, k=opt.nce_k)
+            train_set = ImageNet(args=opt, partition=train_partition, transform=train_trans, is_sample=True,
+                                 k=opt.nce_k)
         else:
             train_set = ImageNet(args=opt, partition=train_partition, transform=train_trans)
         n_data = len(train_set)
@@ -201,7 +201,8 @@ def main():
     elif opt.dataset == 'tieredImageNet':
         train_trans, test_trans = transforms_options[opt.transform]
         if opt.distill in ['contrast']:
-            train_set = TieredImageNet(args=opt, partition=train_partition, transform=train_trans, is_sample=True, k=opt.nce_k)
+            train_set = TieredImageNet(args=opt, partition=train_partition, transform=train_trans, is_sample=True,
+                                       k=opt.nce_k)
         else:
             train_set = TieredImageNet(args=opt, partition=train_partition, transform=train_trans)
         n_data = len(train_set)
@@ -228,14 +229,15 @@ def main():
     elif opt.dataset == 'CIFAR-FS' or opt.dataset == 'FC100':
         train_trans, test_trans = transforms_options['D']
         if opt.distill in ['contrast']:
-            train_set = CIFAR100(args=opt, partition=train_partition, transform=train_trans, is_sample=True, k=opt.nce_k)
+            train_set = CIFAR100(args=opt, partition=train_partition, transform=train_trans, is_sample=True,
+                                 k=opt.nce_k)
         else:
             train_set = CIFAR100(args=opt, partition=train_partition, transform=train_trans)
         n_data = len(train_set)
         train_loader = DataLoader(train_set,
                                   batch_size=opt.batch_size, shuffle=True, drop_last=True,
                                   num_workers=opt.num_workers)
-        val_loader = DataLoader(CIFAR100(args=opt, partition='trainval', transform=test_trans),
+        val_loader = DataLoader(CIFAR100(args=opt, partition='val', transform=test_trans),
                                 batch_size=opt.batch_size // 2, shuffle=False, drop_last=False,
                                 num_workers=opt.num_workers // 2)
         meta_testloader = DataLoader(MetaCIFAR100(args=opt, partition='test',
@@ -252,7 +254,7 @@ def main():
             n_cls = 80
         else:
             if opt.dataset == 'CIFAR-FS':
-                n_cls = 64
+                n_cls = 80
             elif opt.dataset == 'FC100':
                 n_cls = 60
             else:
@@ -295,9 +297,9 @@ def main():
         raise NotImplementedError(opt.distill)
 
     criterion_list = nn.ModuleList([])
-    criterion_list.append(criterion_cls)    # classification loss
-    criterion_list.append(criterion_div)    # KL divergence loss, original knowledge distillation
-    criterion_list.append(criterion_kd)     # other knowledge distillation loss
+    criterion_list.append(criterion_cls)  # classification loss
+    criterion_list.append(criterion_div)  # KL divergence loss, original knowledge distillation
+    criterion_list.append(criterion_kd)  # other knowledge distillation loss
 
     # optimizer
     optimizer = optim.SGD(trainable_list.parameters(),
@@ -457,8 +459,8 @@ def train(epoch, train_loader, module_list, criterion_list, optimizer, opt):
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t'
                   'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                   epoch, idx, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses, top1=top1, top5=top5))
+                epoch, idx, len(train_loader), batch_time=batch_time,
+                data_time=data_time, loss=losses, top1=top1, top5=top5))
             sys.stdout.flush()
 
     print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'

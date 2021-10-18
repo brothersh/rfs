@@ -1,13 +1,16 @@
-import torch
-import torchvision.transforms as transforms
 import random
-import torch.nn as nn
-import torch.nn.functional as F
-from dataset.cifartask import CIFARTask
-from torch.utils.data import SequentialSampler, BatchSampler
-from util import AverageMeter
-from label_prop.label_prop import *
 import os
+
+import torch.nn as nn
+import torch
+import torch.nn.functional as F
+
+from label_prop.label_prop import predict, labelPropagation
+from util import *
+from dataset.dataset_task import CIFARTask
+from torchvision import transforms
+from debug_util import print_task_feature_tsne
+
 
 def sample_transform():
     choices = [transforms.RandomCrop(32, padding=4),
@@ -22,35 +25,20 @@ class ContrastiveLoss(nn.Module):
     def __init__(self, T=0.15, alpha=1):
         super(ContrastiveLoss, self).__init__()
         self.T = T
-        self.alpha = alpha
 
     def forward(self, x, y):
-        exp_pos = []
-        exp_neg = []
+        t_list = x | y
 
-        num_samples = len(x)
-        for i in range(num_samples):
-            exp_pos.append(self.get_exp_cosine(x[i], y[i], self.T))
 
-        sum = torch.zeros(1).cuda()
-        for i in range(num_samples):
-            for j in range(num_samples):
-                if i != j:
-                    sum = torch.add(sum, self.get_exp_cosine(x[i], x[j], self.T))
-                    sum = torch.add(sum, self.get_exp_cosine(x[i], y[j], self.T))
-            exp_neg.append(sum)
 
-        log_items = [torch.log(torch.div(exp_pos[i], exp_neg[i])) for i in range(num_samples)]
-        nce_loss = torch.zeros_like(log_items[0])
-        for item in log_items:
-            nce_loss = torch.add(nce_loss, item)
-        nce_loss = -nce_loss
-        js_loss = self.js_div(x, y)
-        loss = nce_loss + self.alpha * js_loss
+
+
+
+
         return loss
 
     def get_exp_cosine(self, a, b, T):
-        return torch.exp(torch.cosine_similarity(a, b, dim=(int)(len(a.size()) > 1)) / T)
+        return torch.exp(torch.cosine_similarity(a, b) / T)
 
     def js_div(self, a: torch.Tensor, b, is_softmax=True):
         kl_div = nn.KLDivLoss(reduction='batchmean')
@@ -62,7 +50,7 @@ class ContrastiveLoss(nn.Module):
         return (kl_div(log_mean, a) + kl_div(log_mean, b)) / 2
 
 
-def fine_tune_with_unlabeled(save_path, task: CIFARTask, model: nn.Module, batch_size=80, epochs=100,begin_epoch=1):
+def fine_tune_with_unlabeled(save_path, task: CIFARTask, model: nn.Module, batch_size=80, epochs=100, begin_epoch=1):
     model.cuda()
     # sample 2 transforms for contrastive learning
     trans_x, trans_y = sample_transform()
@@ -70,7 +58,8 @@ def fine_tune_with_unlabeled(save_path, task: CIFARTask, model: nn.Module, batch
     trans_y = task.task_trans(trans_y)
 
     # get a copy of unlabeled sample pool and shuffle it
-    unlabeled_samples = list(task.get_raw_sample('u'))
+    unlabeled_samples, _ = task.get_raw_sample('u')
+    unlabeled_samples = list(unlabeled_samples)
     random.shuffle(unlabeled_samples)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
@@ -85,25 +74,28 @@ def fine_tune_with_unlabeled(save_path, task: CIFARTask, model: nn.Module, batch
         batches.append(unlabeled_samples[begin:end])
         begin = end
 
+    visual_save_path = '../visual/transform_finetune'
+    print_task_feature_tsne(model, task, title='epoch_0', result_save_path=visual_save_path)
     for epoch in range(begin_epoch, epochs + 1):
-        cosine_scheduler.step()
+        if epoch > begin_epoch:
+            cosine_scheduler.step()
 
         fine_tune_one_epoch(epoch, model, batches, criterion, optimizer, (trans_x, trans_y))
+        print_task_feature_tsne(model, task, title='epoch_{}'.format(epoch), result_save_path=visual_save_path)
         # test epoch acc
         model.eval()
-        acc = predict(task,model)
+        acc = predict(task, model)
 
-        print('epoch [{}] Acc [{}]'.format(epoch,acc))
+        if epoch % 10 == 0:
+            print('epoch [{}] Acc [{}]'.format(epoch, acc))
 
-        print('==> Saving....')
-        state = {
-            'epoch': epoch,
-            'model': model.state_dict()
-        }
-        save_file = os.path.join(save_path, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
-        torch.save(state, save_file)
-
-
+            print('==> Saving....')
+            state = {
+                'epoch': epoch,
+                'model': model.state_dict()
+            }
+            save_file = os.path.join(save_path, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
+            torch.save(state, save_file)
 
 
 def fine_tune_one_epoch(epoch, model, batches, criterion, optimizer, trans_list):
@@ -135,4 +127,9 @@ def fine_tune_one_epoch(epoch, model, batches, criterion, optimizer, trans_list)
         optimizer.step()
         # ===================
         losses.update(loss.item(), len(batch))
-        print('epoch [{}]: idx [{}/{}  loss [{}]/[{}]'.format(epoch, idx+1, len(batches), losses.val, losses.avg))
+        print('epoch [{}]: idx [{}/{}  loss [{}]/[{}]'.format(epoch, idx + 1, len(batches), losses.val, losses.avg))
+
+
+
+
+

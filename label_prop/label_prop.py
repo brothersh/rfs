@@ -3,7 +3,7 @@ import numpy as np
 
 import torch
 import random
-from dataset.cifartask import CIFARTask
+from dataset.dataset_task import CIFARTask
 from torch.utils.data.dataloader import DataLoader
 
 

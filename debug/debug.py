@@ -16,6 +16,7 @@ from torchsummary import summary
 import torch.backends.cudnn as cudnn
 import tensorboard_logger as tb_logger
 from torch.utils.data import DataLoader
+from torchvision import transforms
 from models.util import *
 from util import *
 
@@ -56,6 +57,7 @@ def main():
     data_root = '../save/data/miniImageNet/'
 
     save_path = '../save/embedding'
+    finetune_model_save_path = '../save/model/test/{}'.format(model_name)
     #
     # 测试mlp
     # mlp_name = 'backbone:{}_with_center_loss|data:{}'.format(type[type_idx], dset[dset_idx])
@@ -96,16 +98,11 @@ def main():
     #     file.mkdir()
     # print_scatter_2d(result,lab,save_path=embed_visual_path,f_name='test_mlp_embedding',title='mlp embedding')
 
-    a = [torch.rand(5) for _ in range(3)]
-    b = [torch.rand(5) for _ in range(3)]
-    print(a)
-    print(b)
 
-    c = a | b
-    print(c)
+
     # 测试微调的效果
-    # task = CIFARTask(data_root)
-    # fine_tune_with_unlabeled(save_path, task, model)
+    task = MiniTask(data_root)
+    fine_tune_with_unlabeled(finetune_model_save_path, task, model,batch_size=8)
 
     # 测试训练集样本的聚类
     # result_save_path = '../visual/wrn_mini_trainval_3d_with_center_loss'

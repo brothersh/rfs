@@ -1,19 +1,22 @@
 import random
 import os
+from pathlib import Path
 
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+from torch.utils.data import DataLoader
+
 from label_prop.label_prop import predict, labelPropagation
 from util import *
-from dataset.dataset_task import CIFARTask
+from dataset.dataset_task import CIFARTask, DataTask, MiniTask
 from torchvision import transforms
-from debug_util import print_task_feature_tsne
+from debug_util import print_task_feature_tsne, get_timestamp
 
 
 def sample_transform():
-    choices = [transforms.RandomCrop(32, padding=4),
+    choices = [transforms.RandomCrop(84, padding=4),
                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
                transforms.RandomHorizontalFlip()]
 
@@ -27,18 +30,23 @@ class ContrastiveLoss(nn.Module):
         self.T = T
 
     def forward(self, x, y):
-        t_list = x | y
+        n = x.shape[0]
+        t_list = torch.vstack([x,y])
+        aff = []
+        for i in range(2*n):
+            aff_item = []
+            for j in range(2*n):
+                aff_item.append(self.exp_cosine(t_list[i], t_list[j],self.T))
+            aff.append(aff_item)
+        loss = 0
+        for i in range(2 * n):
+            pos = aff[i][i + n] if i < n else aff[i][i - n]
+            neg = sum(aff[i]) - aff[i][i] - pos
+            loss += torch.log(pos / neg)
+        return -loss
 
-
-
-
-
-
-
-        return loss
-
-    def get_exp_cosine(self, a, b, T):
-        return torch.exp(torch.cosine_similarity(a, b) / T)
+    def exp_cosine(self, a, b, T):
+        return torch.exp(torch.cosine_similarity(a, b,dim=0) / T)
 
     def js_div(self, a: torch.Tensor, b, is_softmax=True):
         kl_div = nn.KLDivLoss(reduction='batchmean')
@@ -50,40 +58,29 @@ class ContrastiveLoss(nn.Module):
         return (kl_div(log_mean, a) + kl_div(log_mean, b)) / 2
 
 
-def fine_tune_with_unlabeled(save_path, task: CIFARTask, model: nn.Module, batch_size=80, epochs=100, begin_epoch=1):
+def fine_tune_with_unlabeled(save_path, task: DataTask, model: nn.Module, batch_size=80, epochs=100, begin_epoch=1):
     model.cuda()
     # sample 2 transforms for contrastive learning
     trans_x, trans_y = sample_transform()
-    trans_x = task.task_trans(trans_x)
-    trans_y = task.task_trans(trans_y)
-
-    # get a copy of unlabeled sample pool and shuffle it
-    unlabeled_samples, _ = task.get_raw_sample('u')
-    unlabeled_samples = list(unlabeled_samples)
-    random.shuffle(unlabeled_samples)
-
+    task.set_range('u')
+    unlabeled_loader = DataLoader(task, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
     cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
     criterion = ContrastiveLoss()
 
-    # build batches
-    batches = []
-    begin = 0
-    for _ in range(task.total_unlabeled // batch_size + 1):
-        end = min(begin + batch_size, task.sample_num)
-        batches.append(unlabeled_samples[begin:end])
-        begin = end
-
     visual_save_path = '../visual/transform_finetune'
+    now = get_timestamp()
+    f = Path(os.path.join(save_path, now))
+    if not f.exists() or not f.is_dir():
+        f.mkdir(parents=True)
+
     print_task_feature_tsne(model, task, title='epoch_0', result_save_path=visual_save_path)
     for epoch in range(begin_epoch, epochs + 1):
-        if epoch > begin_epoch:
-            cosine_scheduler.step()
+        cosine_scheduler.step()
 
-        fine_tune_one_epoch(epoch, model, batches, criterion, optimizer, (trans_x, trans_y))
+        fine_tune_one_epoch(epoch, model, task, unlabeled_loader, criterion, optimizer, (trans_x, trans_y))
         print_task_feature_tsne(model, task, title='epoch_{}'.format(epoch), result_save_path=visual_save_path)
         # test epoch acc
-        model.eval()
         acc = predict(task, model)
 
         if epoch % 10 == 0:
@@ -94,42 +91,36 @@ def fine_tune_with_unlabeled(save_path, task: CIFARTask, model: nn.Module, batch
                 'epoch': epoch,
                 'model': model.state_dict()
             }
-            save_file = os.path.join(save_path, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
+            save_file = os.path.join(save_path, now, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
             torch.save(state, save_file)
 
 
-def fine_tune_one_epoch(epoch, model, batches, criterion, optimizer, trans_list):
+def fine_tune_one_epoch(epoch, model, task, loader, criterion, optimizer, trans_list):
     model.train()
     losses = AverageMeter()
     trans_x, trans_y = trans_list
 
-    for idx, batch in enumerate(batches):
-        samples_x = []
-        samples_y = []
-        for sample in batch:
-            samples_x.append(trans_x(sample))
-            samples_y.append(trans_y(sample))
-        samples_x = torch.stack(samples_x).float()
-        samples_y = torch.stack(samples_y).float()
+    enum_x = enumerate(loader)
+    enum_y = enumerate(loader)
 
-        if torch.cuda.is_available():
-            samples_x = samples_x.cuda()
-            samples_y = samples_y.cuda()
+    for batch_idx in range(len(loader)):
+        task.set_trans(trans_x)
+        idx, (inputs_x, _, _, _) = next(enum_x)
+        task.set_trans(trans_y)
+        idx, (inputs_y, _, _, _) = next(enum_y)
+        # =================forward==================
+        inputs_x = inputs_x.float().cuda()
+        inputs_y = inputs_y.float().cuda()
 
-        feat_x = model(samples_x, is_feat=True)[0][-1]
-        feat_y = model(samples_y, is_feat=True)[0][-1]
+        feat_x = model(inputs_x, is_feat=True)[0][-1]
+        feat_y = model(inputs_y, is_feat=True)[0][-1]
 
         loss = criterion(feat_x, feat_y)
-
-        # =================optimization
+        # ==================backward=============
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        # ===================
-        losses.update(loss.item(), len(batch))
-        print('epoch [{}]: idx [{}/{}  loss [{}]/[{}]'.format(epoch, idx + 1, len(batches), losses.val, losses.avg))
 
-
-
-
-
+        losses.update(loss.item(), inputs_x.shape[0])
+        print(
+            'epoch [{}]: idx [{}/{}  loss [{}]/[{}]'.format(epoch, batch_idx + 1, len(loader), losses.val, losses.avg))

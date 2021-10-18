@@ -67,13 +67,16 @@ class DataTask(Dataset):
         return label_set, support_set, unlabeled_set, query_set
 
     def task_trans(self, trans):
-        self.transform = transforms.Compose([
+        return transforms.Compose([
             lambda x: Image.fromarray(x),
             trans,
             lambda x: np.asarray(x),
             transforms.ToTensor(),
             self.normalize
         ])
+
+    def set_trans(self, trans):
+        self.transform = self.task_trans(trans)
 
     def build_task_sets(self):
         # build index set of s,u,q

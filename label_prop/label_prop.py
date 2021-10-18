@@ -3,7 +3,7 @@ import numpy as np
 
 import torch
 import random
-from dataset.dataset_task import CIFARTask
+from dataset.dataset_task import CIFARTask, MiniTask, DataTask
 from torch.utils.data.dataloader import DataLoader
 
 
@@ -110,40 +110,25 @@ def labelPropagation(Mat_Label, Mat_Unlabel, labels, kernel_type='rbf', rbf_sigm
 #             targets.append(new_label_map[cls])
 
 
-
-def predict(task: CIFARTask, model):
-    label_set = task.label_set
-    support_set = task.support_set
-    unlabeled_set = task.unlabeled_set
-    query_set = task.query_set
-
-    # map the origin label to 0-n label space
-    # Example: {46,5,12,37,19} are mapped as {46:0, 5:1, 12:2, 37:3, 19:4}
-    new_label_map = dict()
-    for idx, label in enumerate(label_set):
-        new_label_map[label] = idx
-
+def predict(task: DataTask, model):
     # build the real feature list and their labels for label propagation
     model.eval()
+
     task_loader = DataLoader(task, batch_size=task.sample_num)
-    _, inputs = next(enumerate(task_loader))
-    inputs = inputs.float().cuda()
-    features = model(inputs, is_feat=True)[0][-1]
-    targets = []
-    for target in task.targets:
-        targets.append(new_label_map[target])
+    with torch.no_grad():
+        _, (inputs, labels, _, _) = next(enumerate(task_loader))
+        inputs = inputs.float().cuda()
+        features = model(inputs, is_feat=True)[0][-1]
 
-
-    features = features.detach().cpu().numpy()
-    targets = np.asarray(targets)
+    features = features.data.cpu().numpy()
+    labels = np.asarray(labels)
 
     predict = labelPropagation(features[0:task.total_support], features[task.total_support:],
                                targets[0:task.total_support], max_iter=5000)
 
     # the last {query_num * n_way} of the {predict} list is the prediction of queryset
     query_predict = predict[-task.total_query:]
-    expected = targets[-task.total_query:]
+    expected = labels[-task.total_query:]
 
     acc = np.equal(expected, query_predict).sum() * 100 / len(query_predict)
-
     return acc

@@ -8,6 +8,7 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
 from sklearn.manifold import TSNE
 from torch.utils.data import DataLoader
 from dataset.mycifar import MyCIFAR100
@@ -29,7 +30,7 @@ def print_scatter_3d(result, label, save_path, f_name, title):
 
 
 def print_scatter_2d(result, label, save_path, f_name, title):
-    # result = normalize(result)
+    result = normalize(result)
     fig = plt.figure()
     plt.title(title)
     plt.scatter(result[:, 0], result[:, 1], c=label)
@@ -47,8 +48,11 @@ def print_text(result, label, save_path, f_name, title):
 
 
 def normalize(result):
-    r_min, r_max = np.min(result, 0), np.max(result, 0)
-    return (result - r_min) / (r_max - r_min)
+    with torch.no_grad():
+        tmp = torch.as_tensor(result)
+        tmp = F.normalize(tmp)
+        result = tmp.data.cpu().numpy()
+    return result
 
 
 def get_timestamp():

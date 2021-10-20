@@ -12,6 +12,7 @@ import torchvision.models
 sys.path.append('../')
 
 import torch
+import torch.nn.functional as F
 from torchsummary import summary
 import torch.backends.cudnn as cudnn
 import tensorboard_logger as tb_logger
@@ -98,10 +99,9 @@ def main():
     #     file.mkdir()
     # print_scatter_2d(result,lab,save_path=embed_visual_path,f_name='test_mlp_embedding',title='mlp embedding')
 
-
-
     # 测试微调的效果
     task = MiniTask(data_root)
+    # print_task_feature_tsne(model,task,'test_normalize',n_dim=3)
     fine_tune_with_unlabeled(finetune_model_save_path, task, model,batch_size=8)
 
     # 测试训练集样本的聚类

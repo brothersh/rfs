@@ -110,25 +110,48 @@ def labelPropagation(Mat_Label, Mat_Unlabel, labels, kernel_type='rbf', rbf_sigm
 #             targets.append(new_label_map[cls])
 
 
-def predict(task: DataTask, model):
-    # build the real feature list and their labels for label propagation
+def get_whole_features(task: DataTask, model):
     model.eval()
 
-    task_loader = DataLoader(task, batch_size=task.sample_num)
+    task.set_range('t')
+    loader = DataLoader(task, batch_size=task.sample_num)
     with torch.no_grad():
-        _, (inputs, labels, _, _) = next(enumerate(task_loader))
+        _, (inputs, labels, _, _) = next(enumerate(loader))
         inputs = inputs.float().cuda()
         features = model(inputs, is_feat=True)[0][-1]
 
     features = features.data.cpu().numpy()
     labels = np.asarray(labels)
+    return features, labels
 
+
+# predict use label propagation
+def predict_lp(task: DataTask, model):
+    # build the real feature list and their labels for label propagation
+    features, labels = get_whole_features(task, model)
     predict = labelPropagation(features[0:task.total_support], features[task.total_support:],
-                               targets[0:task.total_support], max_iter=5000)
+                               labels[0:task.total_support], max_iter=5000)
 
     # the last {query_num * n_way} of the {predict} list is the prediction of queryset
     query_predict = predict[-task.total_query:]
     expected = labels[-task.total_query:]
 
     acc = np.equal(expected, query_predict).sum() * 100 / len(query_predict)
+    return acc
+
+
+# predict use similarity measure
+def predict_sm(task: DataTask, model):
+    features, labels = get_whole_features(task, model)
+
+    k = task.support_num
+    proto = np.asarray([np.average(features[i:i+k],axis=0) for i in range(0,task.total_support,k)])
+    query = features[-task.total_query:]
+
+    affine_similarity  = np.matmul(query,proto.T)
+
+    predict = np.argmax(affine_similarity,axis=1)
+    target = task.labels[-task.total_query:]
+
+    acc = np.equal(target,predict).sum()*100/len(predict)
     return acc
